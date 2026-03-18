@@ -19,25 +19,17 @@
  */
 
 const express = require('express')
-const path = require('path')
-const fs = require('fs')
 const router = express.Router()
 const { verifyToken, requireRole } = require('../middleware/auth')
 const { adminLimiter } = require('../middleware/rateLimit')
-const User = require('../models/user.model')
-const Badge = require('../models/badge.model')
-const BadgeDefinition = require('../models/badgeDefinition.model')
-const GitHub = require('../models/github.model')
-const Score = require('../models/score.model')
-const { recalculateUserScore } = require('../scoreService')
 const {
     getCohortAnalytics, getSkillIntelligence, getAtRiskCohorts, getTrendAnalysis, getPlatformStats,
-} = require('../adminAnalytics')
+} = require('../services/analytics/adminAnalytics')
 const {
     executeRightToErasure, getConsentHistory, createAuditLog, getAuditLogs, exportUserData,
-} = require('../privacyService')
-const { withCache } = require('../analyticsCache')
-const { uploadFile } = require('../infrastructure/s3')
+} = require('../services/privacy/privacyService')
+const { withCache } = require('../services/analytics/analyticsCache')
+const { getUsers, exportUsersCsv, createBadgeDefinition, assignBadge, removeBadge } = require('../controllers/adminController')
 const logger = require('../utils/logger')
 
 // Apply rate limiting to all admin routes
@@ -46,33 +38,9 @@ router.use(adminLimiter)
 // Get all users (admin)
 router.get('/admin/users', verifyToken, requireRole('admin'), async (req, res, next) => {
     try {
-        const { page = 1, limit = 20, search = '', department = '', graduationYear = '' } = req.query
-        const query = { role: { $ne: 'admin' } }
-        if (search) query.$or = [{ name: { $regex: search, $options: 'i' } }, { email: { $regex: search, $options: 'i' } }]
-        if (department) query.department = department
-        if (graduationYear) query.graduationYear = parseInt(graduationYear)
-
-        const skip = (parseInt(page) - 1) * parseInt(limit)
-        const totalCount = await User.countDocuments(query)
-        const users = await User.find(query)
-            .select('name email department graduationYear totalScore atsScore githubScore badgesScore hasResume profilePicture createdAt')
-            .sort({ totalScore: -1, createdAt: -1 }).skip(skip).limit(parseInt(limit))
-
-        const usersWithData = await Promise.all(users.map(async (u) => {
-            const [badges, githubDoc] = await Promise.all([Badge.find({ user: u._id }).populate('definitionId'), GitHub.findOne({ user: u._id })])
-            let finalAvatar = u.profilePicture || null
-            if (!finalAvatar && githubDoc?.profile?.avatarUrl) finalAvatar = githubDoc.profile.avatarUrl
-            return {
-                id: u._id, name: u.name || 'Anonymous', email: u.email, department: u.department || 'Not set',
-                graduationYear: u.graduationYear || null, totalScore: u.totalScore || 0, atsScore: u.atsScore || 0,
-                githubScore: u.githubScore || 0, badgesScore: u.badgesScore || 0, hasResume: !!u.hasResume,
-                profilePicture: finalAvatar, githubUsername: githubDoc?.githubUsername || null, joinedAt: u.createdAt,
-                badges: badges.map(b => { const bObj = b.toObject(); return { ...bObj, definition: bObj.definitionId } }) || [],
-            }
-        }))
-
-        await createAuditLog('ADMIN_VIEW_USERS', req.user.id, { search, department, graduationYear })
-        return res.json({ users: usersWithData, totalCount, page: parseInt(page), totalPages: Math.ceil(totalCount / parseInt(limit)) })
+        const result = await getUsers(req.query)
+        await createAuditLog('ADMIN_VIEW_USERS', req.user.id, req.query)
+        return res.json(result)
     } catch (err) {
         next(err)
     }
@@ -81,25 +49,8 @@ router.get('/admin/users', verifyToken, requireRole('admin'), async (req, res, n
 // Export users CSV
 router.get('/admin/users/export', verifyToken, requireRole('admin'), async (req, res, next) => {
     try {
-        const { search = '', department = '', graduationYear = '' } = req.query
-        const query = { role: { $ne: 'admin' } }
-        if (search) query.$or = [{ name: { $regex: search, $options: 'i' } }, { email: { $regex: search, $options: 'i' } }]
-        if (department) query.department = department
-        if (graduationYear) query.graduationYear = parseInt(graduationYear)
-
-        const users = await User.find(query)
-            .select('name email department graduationYear totalScore atsScore githubScore badgesScore bio profilePicture createdAt')
-            .sort({ totalScore: -1 })
-
-        let csv = 'Name,Email,Department,Year,Total Score,ATS Score,GitHub Score,Badges Score,Bio,Profile Picture,Joined At\n'
-        users.forEach(u => {
-            const bio = (u.bio || '').replace(/"/g, '""')
-            csv += [`"${u.name || 'Anonymous'}"`, `"${u.email}"`, `"${u.department || 'Not set'}"`,
-            u.graduationYear || '', u.totalScore || 0, u.atsScore || 0, u.githubScore || 0, u.badgesScore || 0,
-            `"${bio}"`, `"${u.profilePicture || ''}"`, `"${new Date(u.createdAt).toISOString()}"`].join(',') + '\n'
-        })
-
-        await createAuditLog('ADMIN_EXPORT_USERS', req.user.id, { search, department, graduationYear })
+        const csv = await exportUsersCsv(req.query)
+        await createAuditLog('ADMIN_EXPORT_USERS', req.user.id, req.query)
         res.header('Content-Type', 'text/csv')
         res.attachment(`users_export_${Date.now()}.csv`)
         return res.send(csv)
@@ -214,32 +165,21 @@ router.post('/admin/badges', verifyToken, requireRole('admin'), async (req, res,
     try {
         const { name, description, criteria, points } = req.body
         if (!req.files || !req.files.icon) return res.status(400).json({ error: 'Icon image is required' })
-        const iconFile = req.files.icon
-        if (!iconFile.mimetype.startsWith('image/')) return res.status(400).json({ error: 'File must be an image' })
-
-        const fileExt = path.extname(iconFile.name)
-        const iconFilename = `badge_${Date.now()}${fileExt}`
-        let iconUrl
-
-        try {
-            const s3Key = `badges/${iconFilename}`
-            await uploadFile(iconFile.data, s3Key, iconFile.mimetype)
-            iconUrl = `${req.protocol}://${req.get('host')}/files/${s3Key}`
-            logger.info(`[Badge] Icon uploaded to S3: ${iconUrl}`)
-        } catch (s3Err) {
-            logger.warn('S3 Badge Upload failed, falling back to local', { error: s3Err.message })
-            const uploadPath = path.join(__dirname, '../../uploads/badges', iconFilename)
-            const badgeDir = path.dirname(uploadPath)
-            if (!fs.existsSync(badgeDir)) fs.mkdirSync(badgeDir, { recursive: true })
-            await iconFile.mv(uploadPath)
-            iconUrl = `/uploads/badges/${iconFilename}`
-        }
-
-        const badgeDef = await BadgeDefinition.create({ name, description, criteria, icon: iconUrl, points: points ? Number(points) : 2 })
+        
+        const badgeDef = await createBadgeDefinition(
+            { name, description, criteria, points },
+            req.files.icon,
+            req.protocol,
+            req.get('host')
+        )
+        
         await createAuditLog('ADMIN_CREATE_BADGE', req.user.id, { badgeName: name })
         return res.json({ badge: badgeDef })
     } catch (err) {
         if (err.code === 11000) return res.status(400).json({ error: 'Badge name already exists' })
+        if (err.message.includes('required') || err.message.includes('must be')) {
+            return res.status(400).json({ error: err.message })
+        }
         next(err)
     }
 })
@@ -247,12 +187,9 @@ router.post('/admin/badges', verifyToken, requireRole('admin'), async (req, res,
 // Soft-delete badge definition
 router.delete('/admin/badges/:badgeId', verifyToken, requireRole('admin'), async (req, res, next) => {
     try {
-        const badgeDef = await BadgeDefinition.findById(req.params.badgeId)
-        if (!badgeDef) return res.status(404).json({ error: 'Badge not found' })
-        badgeDef.active = false
-        await badgeDef.save()
-        await createAuditLog('ADMIN_DELETE_BADGE', req.user.id, { badgeName: badgeDef.name, badgeId: req.params.badgeId })
-        return res.json({ success: true, message: 'Badge deleted successfully' })
+        const result = await removeBadge(req.params.badgeId)
+        await createAuditLog('ADMIN_DELETE_BADGE', req.user.id, { badgeId: req.params.badgeId })
+        return res.json(result)
     } catch (err) {
         next(err)
     }
@@ -261,18 +198,13 @@ router.delete('/admin/badges/:badgeId', verifyToken, requireRole('admin'), async
 // Assign badge to user
 router.post('/admin/users/:userId/badges', verifyToken, requireRole('admin'), async (req, res, next) => {
     try {
-        const { userId } = req.params
-        const { badgeDefinitionId } = req.body
-        if (!badgeDefinitionId) return res.status(400).json({ error: 'Badge Definition ID required' })
-        const badgeDef = await BadgeDefinition.findById(badgeDefinitionId)
-        if (!badgeDef) return res.status(404).json({ error: 'Badge Definition not found' })
-        const existing = await Badge.findOne({ user: userId, definitionId: badgeDefinitionId })
-        if (existing) return res.status(400).json({ error: 'User already has this badge' })
-        const newBadge = await Badge.create({ user: userId, badgeType: badgeDef.name, definitionId: badgeDef._id, earnedAt: new Date() })
-        await recalculateUserScore(userId)
-        await createAuditLog('ADMIN_ASSIGN_BADGE', req.user.id, { targetUser: userId, badgeName: badgeDef.name })
-        return res.json({ success: true, badge: newBadge })
+        const result = await assignBadge(req.params.userId, req.body.badgeDefId)
+        await createAuditLog('ADMIN_ASSIGN_BADGE', req.user.id, { targetUser: req.params.userId, badgeDefId: req.body.badgeDefId })
+        return res.json({ badge: result })
     } catch (err) {
+        if (err.message.includes('not found') || err.message.includes('already has')) {
+            return res.status(400).json({ error: err.message })
+        }
         next(err)
     }
 })
@@ -280,18 +212,13 @@ router.post('/admin/users/:userId/badges', verifyToken, requireRole('admin'), as
 // Remove badge from user
 router.delete('/admin/users/:userId/badges/:badgeId', verifyToken, requireRole('admin'), async (req, res, next) => {
     try {
-        const { userId, badgeId } = req.params
-        const badge = await Badge.findById(badgeId)
-        if (!badge) return res.status(404).json({ error: 'Badge not found' })
-        if (String(badge.user) !== String(userId)) {
-            logger.warn(`[Admin] Owner mismatch on badge delete: ${badge.user} vs ${userId}`)
-        }
-        const definition = await BadgeDefinition.findById(badge.definitionId)
-        await Badge.deleteOne({ _id: badgeId })
-        await recalculateUserScore(userId)
-        await createAuditLog('ADMIN_REMOVE_BADGE', req.user.id, { targetUser: userId, badgeType: badge.badgeType, badgeName: definition ? definition.name : 'Unknown' })
-        return res.json({ success: true, message: 'Badge removed' })
+        const result = await removeBadge(req.params.userId, req.params.badgeId)
+        await createAuditLog('ADMIN_REMOVE_BADGE', req.user.id, { targetUser: req.params.userId, badgeId: req.params.badgeId })
+        return res.json(result)
     } catch (err) {
+        if (err.message.includes('not found') || err.message.includes('does not belong')) {
+            return res.status(400).json({ error: err.message })
+        }
         next(err)
     }
 })

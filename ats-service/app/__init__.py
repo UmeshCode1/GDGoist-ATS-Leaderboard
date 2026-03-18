@@ -55,13 +55,24 @@ def initialize_nlp_resources():
     
     try:
         # Download stopwords if not already present
-        nltk.download('stopwords', quiet=True)
-        STOP_WORDS = set(stopwords.words('english'))
+        try:
+            nltk.download('stopwords', quiet=True, raise_on_error=True)
+            STOP_WORDS = set(stopwords.words('english'))
+        except Exception as download_error:
+            logger.warning("Could not download NLTK stopwords: %s", download_error)
+            STOP_WORDS = set()
 
-        # SBERT model loading disabled on Windows due to Numpy compatibility issues
-        logger.info("SBERT model loading disabled on Windows (Numpy compatibility) — using TF-IDF")
-        sbert_model = None
-        SBERT_ENABLED = False
+        # Try to load SBERT model for semantic analysis
+        try:
+            from sentence_transformers import SentenceTransformer
+            logger.info("Loading SBERT model for semantic analysis...")
+            sbert_model = SentenceTransformer('all-MiniLM-L6-v2')
+            SBERT_ENABLED = True
+            logger.info("✅ SBERT model loaded successfully")
+        except Exception as sbert_error:
+            logger.warning("Could not load SBERT model: %s — falling back to TF-IDF", sbert_error)
+            sbert_model = None
+            SBERT_ENABLED = False
 
     except Exception as e:
         logger.warning("Could not initialise NLP resources: %s — falling back to TF-IDF", e)

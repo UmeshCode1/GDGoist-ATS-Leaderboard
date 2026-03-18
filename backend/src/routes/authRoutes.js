@@ -9,7 +9,7 @@ const express = require('express')
 const bcrypt = require('bcryptjs')
 const router = express.Router()
 const User = require('../models/user.model')
-const { generateToken } = require('../middleware/auth')
+const { generateToken, verifyToken, requireRole } = require('../middleware/auth')
 const { determineUserRole } = require('../services/auth/authService')
 const logger = require('../utils/logger')
 const config = require('../config/config')
@@ -64,8 +64,8 @@ router.post('/auth/login', async (req, res, next) => {
     }
 })
 
-// Password Reset (dev/admin setup)
-router.post('/auth/reset-password', async (req, res, next) => {
+// Password Reset (admin only)
+router.post('/auth/reset-password', verifyToken, requireRole('admin'), async (req, res, next) => {
     try {
         const { email, newPassword } = req.body
         if (!email || !newPassword) return res.status(400).json({ error: 'email and newPassword are required' })

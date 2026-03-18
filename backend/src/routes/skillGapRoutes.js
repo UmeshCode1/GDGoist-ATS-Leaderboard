@@ -9,8 +9,8 @@ const express = require('express')
 const router = express.Router()
 const { verifyToken } = require('../middleware/auth')
 const SkillGap = require('../models/skillgap.model')
-const { recalculateUserScore } = require('../scoreService')
-const { awardBadge } = require('../badges')
+const { recalculateUserScore } = require('../services/scoring/scoreService')
+const { awardBadge } = require('../services/badges/badgeService')
 
 // Get or create skill gap analysis
 router.get('/skillgap', verifyToken, async (req, res, next) => {

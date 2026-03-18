@@ -24,7 +24,7 @@ const config = require('../../config/config')
 const logger = require('../../utils/logger')
 const { normalizeATSScore } = require('./scoreNormalizationService')
 const Resume = require('../../models/resume.model')
-const { recalculateUserScore } = require('../../scoreService')
+const { recalculateUserScore } = require('./scoreService')
 
 /**
  * Process a resume through the ATS microservice and persist the result.

@@ -13,13 +13,13 @@
  * - Badges: 0-100 (from badge achievements, max 20 points = 10 badges)
  */
 
-const Resume = require('./models/resume.model')
-const GitHub = require('./models/github.model')
-const Badge = require('./models/badge.model')
-const BadgeDefinition = require('./models/badgeDefinition.model')
-const Score = require('./models/score.model')
-const User = require('./models/user.model')
-const logger = require('./utils/logger')
+const Resume = require('../../models/resume.model')
+const GitHub = require('../../models/github.model')
+const Badge = require('../../models/badge.model')
+const BadgeDefinition = require('../../models/badgeDefinition.model')
+const Score = require('../../models/score.model')
+const User = require('../../models/user.model')
+const logger = require('../../utils/logger')
 
 // FROZEN WEIGHTS - DO NOT MODIFY
 const WEIGHTS = {

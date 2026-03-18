@@ -5,6 +5,9 @@
  * Import from here instead of reading process.env directly in route/service files.
  */
 
+const { validateEnv } = require('./envValidator')
+validateEnv() // Fail fast if required environment variables are missing
+
 module.exports = {
     // ── Server ───────────────────────────────────────────────────
     PORT: process.env.PORT || 4000,
@@ -14,12 +17,13 @@ module.exports = {
     MONGO_URI: process.env.MONGO_URI,
 
     // ── Auth ─────────────────────────────────────────────────────
-    JWT_SECRET: process.env.JWT_SECRET || 'changeme',
+    JWT_SECRET: process.env.JWT_SECRET,
     JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '7d',
 
     // ── Domain / Admin ────────────────────────────────────────────
     UNIVERSITY_DOMAIN: process.env.UNIVERSITY_DOMAIN || null,
     ADMIN_EMAILS: process.env.ADMIN_EMAILS || '',
+    ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:5174',
 
     // ── External Services ─────────────────────────────────────────
     ATS_SERVICE_URL: process.env.ATS_SERVICE_URL || 'http://localhost:8000',

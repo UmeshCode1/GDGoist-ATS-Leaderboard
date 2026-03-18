@@ -1,3 +1,9 @@
+import warnings
+import os
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+os.environ["PYTHONWARNINGS"] = "ignore"
+
 """
 ATS Service - Main Entry Point
 

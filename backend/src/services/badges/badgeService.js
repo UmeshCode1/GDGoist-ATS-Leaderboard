@@ -5,11 +5,11 @@
  * Prevents duplicate awards and ensures consistent scoring.
  */
 
-const Badge = require('./models/badge.model')
-const Resume = require('./models/resume.model')
-const GitHub = require('./models/github.model')
-const Connection = require('./models/connection.model')
-const SkillGap = require('./models/skillgap.model')
+const Badge = require('../../models/badge.model')
+const Resume = require('../../models/resume.model')
+const GitHub = require('../../models/github.model')
+const Connection = require('../../models/connection.model')
+const SkillGap = require('../../models/skillgap.model')
 
 // FROZEN BADGE DEFINITIONS
 const BADGE_DEFINITIONS = {

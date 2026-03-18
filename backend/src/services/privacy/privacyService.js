@@ -9,15 +9,15 @@
  * All operations are irreversible and comply with Indian DPDP principles.
  */
 
-const User = require('./models/user.model')
-const Resume = require('./models/resume.model')
-const Score = require('./models/score.model')
-const GitHub = require('./models/github.model')
-const Badge = require('./models/badge.model')
-const Connection = require('./models/connection.model')
-const SkillGap = require('./models/skillgap.model')
-const AuditLog = require('./models/auditlog.model')
-const ConsentHistory = require('./models/consenthistory.model')
+const User = require('../../models/user.model')
+const Resume = require('../../models/resume.model')
+const Score = require('../../models/score.model')
+const GitHub = require('../../models/github.model')
+const Badge = require('../../models/badge.model')
+const Connection = require('../../models/connection.model')
+const SkillGap = require('../../models/skillgap.model')
+const AuditLog = require('../../models/auditlog.model')
+const ConsentHistory = require('../../models/consenthistory.model')
 
 /**
  * RIGHT TO ERASURE

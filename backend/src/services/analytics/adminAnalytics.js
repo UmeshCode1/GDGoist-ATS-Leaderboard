@@ -7,11 +7,11 @@
  * All queries use MongoDB aggregation pipelines for performance.
  */
 
-const Score = require('./models/score.model')
-const User = require('./models/user.model')
-const Resume = require('./models/resume.model')
-const GitHub = require('./models/github.model')
-const SkillGap = require('./models/skillgap.model')
+const Score = require('../../models/score.model')
+const User = require('../../models/user.model')
+const Resume = require('../../models/resume.model')
+const GitHub = require('../../models/github.model')
+const SkillGap = require('../../models/skillgap.model')
 
 /**
  * Score bands for employability classification

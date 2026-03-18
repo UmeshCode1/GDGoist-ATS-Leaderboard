@@ -6,7 +6,7 @@
 const express = require('express')
 const router = express.Router()
 const { verifyToken } = require('../middleware/auth')
-const { getScoreBreakdown } = require('../scoreService')
+const { getScoreBreakdown } = require('../services/scoring/scoreService')
 
 router.get('/score/breakdown', verifyToken, async (req, res, next) => {
     try {

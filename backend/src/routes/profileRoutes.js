@@ -17,21 +17,16 @@
  */
 
 const express = require('express')
-const path = require('path')
-const fs = require('fs')
 const router = express.Router()
 const { verifyToken, requireRole } = require('../middleware/auth')
 const { requireOnboarded } = require('../middleware/onboarding')
 const { requireConsent } = require('../middleware/consent')
 const User = require('../models/user.model')
 const Resume = require('../models/resume.model')
-const Score = require('../models/score.model')
-const Badge = require('../models/badge.model')
 const GitHub = require('../models/github.model')
 const { uploadFile, getFile } = require('../infrastructure/s3')
-const { recalculateUserScore } = require('../scoreService')
-const { analyticsCache } = require('../analyticsCache')
-const { exportUserData, executeRightToErasure, recordConsentEvent } = require('../privacyService')
+const { exportUserData, executeRightToErasure, recordConsentEvent } = require('../services/privacy/privacyService')
+const { updateProfile, uploadAvatar, getPublicProfile, proxyS3File } = require('../controllers/profileController')
 const logger = require('../utils/logger')
 
 // Consent
@@ -88,30 +83,12 @@ router.get('/me/profile', verifyToken, async (req, res, next) => {
 // Update profile
 router.put('/me/profile', verifyToken, async (req, res, next) => {
     try {
-        const allowed = ['name', 'department', 'graduationYear', 'bio', 'profilePicture', 'socialLinks', 'projects', 'experiences', 'profileVisibility']
-        const updates = {}
-        for (const key of allowed) {
-            if (req.body[key] !== undefined) updates[key] = req.body[key]
-        }
-        const user = await User.findByIdAndUpdate(req.user.id, { $set: updates }, { new: true }).select('-passwordHash')
-        if (!user) return res.status(404).json({ error: 'User not found' })
-        try {
-            await recalculateUserScore(user._id)
-            analyticsCache.clear()
-        } catch (scoreErr) {
-            logger.error('[Profile] Score/Cache sync error:', { error: scoreErr.message })
-        }
-        logger.info(`[Profile] Updated profile for user ${user.email}`)
-        return res.json({
-            message: 'Profile updated successfully',
-            profile: {
-                id: user._id, name: user.name, email: user.email, department: user.department,
-                graduationYear: user.graduationYear, bio: user.bio || '', profilePicture: user.profilePicture || '',
-                socialLinks: user.socialLinks || {}, projects: user.projects || [],
-                experiences: user.experiences || [], profileVisibility: user.profileVisibility || 'public',
-            },
-        })
+        const user = await updateProfile(req.user.id, req.body)
+        return res.json({ user: { id: user._id, name: user.name, department: user.department, graduationYear: user.graduationYear, bio: user.bio, socialLinks: user.socialLinks, projects: user.projects, experiences: user.experiences, profileVisibility: user.profileVisibility } })
     } catch (err) {
+        if (err.message.includes('not found') || err.message.includes('No valid')) {
+            return res.status(400).json({ error: err.message })
+        }
         next(err)
     }
 })
@@ -119,29 +96,14 @@ router.put('/me/profile', verifyToken, async (req, res, next) => {
 // Upload avatar
 router.post('/me/avatar', verifyToken, async (req, res, next) => {
     try {
-        if (!req.files || !req.files.avatar) return res.status(400).json({ error: 'No file uploaded' })
-        const file = req.files.avatar
-        const uploadDir = path.join(__dirname, '../../uploads')
-        const fileExt = path.extname(file.name)
-        const filename = `avatar-${req.user.id}-${Date.now()}${fileExt}`
-        let fileUrl
-
-        try {
-            const s3Key = `avatars/${filename}`
-            await uploadFile(file.data, s3Key, file.mimetype)
-            fileUrl = `${req.protocol}://${req.get('host')}/files/${s3Key}`
-            logger.info(`[Avatar] Uploaded to S3: ${fileUrl}`)
-        } catch (s3Err) {
-            logger.warn('[Avatar] S3 upload failed, falling back to local', { error: s3Err.message })
-            if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true })
-            await file.mv(path.join(uploadDir, filename))
-            fileUrl = `${req.protocol}://${req.get('host')}/uploads/${filename}`
-        }
-
-        const user = await User.findByIdAndUpdate(req.user.id, { profilePicture: fileUrl }, { new: true }).select('-passwordHash')
-        analyticsCache.clear()
-        return res.json({ message: 'Avatar uploaded successfully', url: fileUrl, profile: { profilePicture: user.profilePicture } })
+        if (!req.files || !req.files.avatar) return res.status(400).json({ error: 'Avatar file is required' })
+        
+        const result = await uploadAvatar(req.user.id, req.files.avatar, req.protocol, req.get('host'))
+        return res.json(result)
     } catch (err) {
+        if (err.message.includes('not found') || err.message.includes('No file')) {
+            return res.status(400).json({ error: err.message })
+        }
         next(err)
     }
 })
@@ -214,16 +176,12 @@ router.get('/files/:key(*)', async (req, res, next) => {
     try {
         const { key } = req.params
         if (!key) return res.status(400).send('Key is required')
+        
         logger.info(`[Proxy] Fetching file: ${key}`)
-        const buffer = await getFile(key)
-        const ext = path.extname(key).toLowerCase()
-        const mimeTypes = {
-            '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
-            '.gif': 'image/gif', '.webp': 'image/webp', '.pdf': 'application/pdf',
-            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        }
-        res.set('Content-Type', mimeTypes[ext] || 'application/octet-stream')
-        res.send(buffer)
+        const { fileBuffer, contentType } = await proxyS3File(key)
+        
+        res.set('Content-Type', contentType)
+        res.send(fileBuffer)
     } catch (err) {
         logger.error(`[Proxy] Error: ${err.message}`)
         res.status(404).send('File not found')
@@ -234,39 +192,14 @@ router.get('/files/:key(*)', async (req, res, next) => {
 router.get('/users/:userId/profile', async (req, res, next) => {
     try {
         const { userId } = req.params
-        const user = await User.findById(userId).select('-passwordHash -email')
-        if (!user) return res.status(404).json({ error: 'User not found' })
-
-        if (user.profileVisibility === 'private') {
-            return res.json({ profile: { id: user._id, name: user.name, department: user.department, graduationYear: user.graduationYear, isPrivate: true } })
-        }
-
-        const latestScore = await Score.findOne({ user: userId }).sort({ createdAt: -1 })
-        const userBadges = await Badge.find({ user: userId }).populate('definitionId').sort({ earnedAt: -1 })
-        const githubDoc = await GitHub.findOne({ user: userId })
         const baseUrl = `${req.protocol}://${req.get('host')}`
-
-        const formattedBadges = userBadges.map(b => {
-            const def = b.definitionId
-            let iconUrl = def ? def.icon : (b.metadata?.icon || '🏅')
-            if (iconUrl && iconUrl.startsWith('/')) iconUrl = `${baseUrl}${iconUrl}`
-            return { name: def ? def.name : b.badgeType, description: def ? def.description : (b.metadata?.description || 'Awarded badge'), icon: iconUrl, earnedAt: b.earnedAt, points: def ? def.points : 0 }
-        })
-
-        let finalAvatar = user.profilePicture || ''
-        if (!finalAvatar && githubDoc?.profile?.avatarUrl) finalAvatar = githubDoc.profile.avatarUrl
-
-        return res.json({
-            profile: {
-                id: user._id, name: user.name, department: user.department, graduationYear: user.graduationYear,
-                bio: user.bio || '', profilePicture: finalAvatar, socialLinks: user.socialLinks || {},
-                projects: user.projects || [], experiences: user.experiences || [],
-                github: githubDoc ? { username: githubDoc.githubUsername } : (user.github?.username ? { username: user.github.username } : null),
-                score: latestScore ? { total: latestScore.totalScore, ats: latestScore.atsComponent, github: latestScore.githubScore, badges: latestScore.badgesScore } : null,
-                badges: formattedBadges, isPrivate: false,
-            },
-        })
+        
+        const result = await getPublicProfile(userId, baseUrl)
+        return res.json(result)
     } catch (err) {
+        if (err.message.includes('not found')) {
+            return res.status(404).json({ error: err.message })
+        }
         next(err)
     }
 })

@@ -5,10 +5,10 @@
  * Ensures GitHub scores stay up-to-date without manual intervention.
  */
 
-const GitHub = require('./models/github.model')
-const { syncGitHubData } = require('./github')
-const { recalculateUserScore } = require('./scoreService')
-const { checkAndAwardBadges } = require('./badges')
+const GitHub = require('../../models/github.model')
+const { syncGitHubData } = require('./githubApi')
+const { recalculateUserScore } = require('../scoring/scoreService')
+const { checkAndAwardBadges } = require('../badges/badgeService')
 
 // Sync interval: 24 hours (in milliseconds)
 const SYNC_INTERVAL = 24 * 60 * 60 * 1000

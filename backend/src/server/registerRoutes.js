@@ -6,6 +6,7 @@
  * any route.
  */
 
+const express = require('express')
 const authRoutes = require('../routes/authRoutes')
 const profileRoutes = require('../routes/profileRoutes')
 const resumeRoutes = require('../routes/resumeRoutes')
@@ -23,17 +24,21 @@ function registerRoutes(app) {
     app.get('/health', (_req, res) => res.json({ status: 'ok' }))
     app.get('/test', (_req, res) => res.json({ message: 'Test endpoint working', timestamp: new Date() }))
 
-    // Domain routes
-    app.use('/', authRoutes)
-    app.use('/', profileRoutes)
-    app.use('/', resumeRoutes)
-    app.use('/', leaderboardRoutes)
-    app.use('/', scoreRoutes)
-    app.use('/', githubRoutes)
-    app.use('/', badgeRoutes)
-    app.use('/', peerRoutes)
-    app.use('/', skillGapRoutes)
-    app.use('/', adminRoutes)
+    // API v1 routes
+    const apiRouter = express.Router()
+    apiRouter.use('/', authRoutes)
+    apiRouter.use('/', profileRoutes)
+    apiRouter.use('/', resumeRoutes)
+    apiRouter.use('/', leaderboardRoutes)
+    apiRouter.use('/', scoreRoutes)
+    apiRouter.use('/', githubRoutes)
+    apiRouter.use('/', badgeRoutes)
+    apiRouter.use('/', peerRoutes)
+    apiRouter.use('/', skillGapRoutes)
+    apiRouter.use('/', adminRoutes)
+
+    // Mount API with prefix and versioning
+    app.use('/api/v1', apiRouter)
 
     // Centralized error handler — must be last
     app.use(errorHandler)

@@ -12,7 +12,8 @@ const router = express.Router()
 const { verifyToken } = require('../middleware/auth')
 const Badge = require('../models/badge.model')
 const BadgeDefinition = require('../models/badgeDefinition.model')
-const { getUserBadges, BADGE_DEFINITIONS, getBadgeProgress } = require('../badges')
+const { getUserBadges, BADGE_DEFINITIONS, getBadgeProgress } = require('../services/badges/badgeService')
+const { formatBadges } = require('../utils/badgeFormatter')
 
 // Get user's earned badges
 router.get('/badges', verifyToken, async (req, res, next) => {
@@ -52,21 +53,10 @@ router.get('/badges/progress', verifyToken, async (req, res, next) => {
 // GET my badges (student, populated with definitions)
 router.get('/me/badges', verifyToken, async (req, res, next) => {
     try {
-        const badges = await Badge.find({ user: req.user.id }).populate('definitionId').sort('-earnedAt')
-
-        const formattedBadges = badges.map(b => {
-            const def = b.definitionId
-            return {
-                _id: b._id,
-                name: def ? def.name : b.badgeType,
-                description: def ? def.description : (b.metadata?.description || 'Awarded badge'),
-                icon: def ? def.icon : (b.metadata?.icon || '🏅'),
-                earnedAt: b.earnedAt,
-                isSystem: !def,
-            }
-        })
-
-        return res.json({ badges: formattedBadges })
+        const badges = await getUserBadges(req.user.id)
+        const baseUrl = `${req.protocol}://${req.get('host')}`
+        const formattedBadges = formatBadges(badges, baseUrl)
+        return res.json({ badges: formattedBadges, progress: await getBadgeProgress(req.user.id) })
     } catch (err) {
         next(err)
     }
